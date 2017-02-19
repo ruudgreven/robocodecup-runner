@@ -1,0 +1,31 @@
+{
+  "name": "robocodecup-runner",
+  "version": "1.0.0",
+  "description": "A script for running robocode battles and outputs the results in a standarized format",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ruudgreven/robocodecup-runner.git"
+  },
+  "bin": {
+    "robocodecup-runner": "./index.js"
+  },
+  "author": "Ruud Greven",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ruudgreven/robocodecup-runner/issues"
+  },
+  "homepage": "https://github.com/ruudgreven/robocodecup-runner#readme",
+  "dependencies": {
+    "chalk": "^1.1.3",
+    "co": "^4.6.0",
+    "co-prompt": "^1.0.0",
+    "commander": "^2.9.0",
+    "dockerode": "^2.3.1",
+    "progress": "^1.1.8",
+    "q": "^1.4.1"
+  }
+}
