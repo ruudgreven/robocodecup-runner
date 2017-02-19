@@ -9,7 +9,8 @@ var fs = require('fs');
 var path = require('path');
 var Q = require('q');
 var unzip = require('unzip');
-var readrecursive = require('fs-readdir-recursive')
+var readrecursive = require('fs-readdir-recursive');
+var waitOn = require('wait-on');
 
 var Docker = require('dockerode');
 var docker = new Docker({socketPath:'/var/run/docker.sock', version: 'v1.13'});
@@ -58,22 +59,52 @@ var checkForRunningContainer = function() {
  * @param to The folder where the teams should be extracted
  */
 var extractTeams = function(from, to) {
+    var deferred = Q.defer();
+    var promises = [];
+
     var files = fs.readdirSync(from);
     for (var i in files) {
-        fs.createReadStream(from + '/' + files[i]).pipe(unzip.Extract({ path: to }));
+        promises.push(extractTeam(from + '/' + files[i], to));
     }
+
+    Q.all(promises).then(function() {
+        deferred.resolve()
+    });
+
+    return deferred.promise;
 };
 
 /**
+ * Extract one team
+ * @param teamfile The JAR file of the team
+ * @param to The output folder
+ */
+var extractTeam = function(teamfile, to) {
+    var deferred = Q.defer();
+
+    fs.createReadStream(teamfile).pipe(unzip.Extract({path: to}))
+        .on('close', function () {
+            deferred.resolve();
+        });
+
+    return deferred.promise;
+}
+
+/**
  * Returns a list of teams for the battle files
+ * @folder the working folder
  */
 var checkAndListTeams = function(folder) {
+    var deferred = Q.defer();
+
     var teamfiles = [];
     var classDefs = [];
     var validteams = [];
 
     //Find all .team and .class files
-    readrecursive(folder).forEach(function(filename) {
+    var files = readrecursive(folder);
+    for (var i in files) {
+        var filename = files[i];
         if (filename.indexOf('.team') > -1) {
             teamfiles.push(filename);
         }
@@ -81,10 +112,11 @@ var checkAndListTeams = function(folder) {
         if (filename.indexOf('.class') > -1) {
             classDefs.push(filename.substr(0, filename.length - 6).replace(/\//g, '.'));        //Remove .class postfix, and replace / with .
         }
-    });
+    }
 
     //Check teams
-    teamfiles.forEach(function(teamfile) {
+    for (var i in teamfiles) {
+        var teamfile = teamfiles[i];
         var teamname = teamfile.substr(0, teamfile.length - 5);
         teamname = teamname.replace(/\//g, '.');
 
@@ -93,19 +125,23 @@ var checkAndListTeams = function(folder) {
         //Read file contents
         try {
             var contents = fs.readFileSync(folder + '/' + teamfile, 'utf8');
-            contents.split('\n').forEach(function(line) {
+            var contentsArray = contents.split('\n');
+            for (var j in contentsArray) {
+                var line = contentsArray[j];
 
                 //Check the teammembers
                 if (line.startsWith('team.members=')) {
                     var robotcount = 0;
-                    line.substr(13).split(',').forEach(function(robot) {
+                    var robots = line.substr(13).split(',');
+                    for (var k in robots) {
+                        var robot = robots[k];
                         if (classDefs.indexOf(robot) <= -1) {
                             if (classDefs.indexOf(robot.substr(0, robot.length - 1)) <= -1) {
                                 throw 'Classfile for robot ' + robot + ' not found';
                             }
                         }
                         robotcount++;
-                    });
+                    }
 
                     if (robotcount!=4) {
                         throw 'There must be 4 robots in the team. Found ' + robotcount;
@@ -118,19 +154,150 @@ var checkAndListTeams = function(folder) {
                         throw 'Wrong robocode version, must be 1.9.2.6, found ' + line.substr(17);
                     }
                 }
-            });
+            }
 
             process.stdout.write(chalk.bold.cyan('OK!\n'));
 
             //Adding team to validteams
-            validteams.push(teamname);
+            validteams.push({
+                packagename: teamname.substr(0, teamname.lastIndexOf('.')),
+                teamname: teamname.substr(teamname.lastIndexOf('.') + 1)
+            });
         } catch (error) {
-            process.stdout.write(chalk.red('ERROR!, ' + error + '\n'));
+            console.error(chalk.bold.red(error));
         }
+        deferred.resolve(validteams);
+    }
+
+    return deferred.promise;
+};
+
+/**
+ * Generate battle files for the given teams in the given folder
+ * @param teams The teams for which battlefiles should be generated
+ * @param folder The folder were the outputfiles should be written
+ * @param templatefile A template file for the robocode battle
+ */
+var generateBattles = function(teams, folder, templatefile) {
+    var deferred = Q.defer();
+
+    var templatecontents = fs.readFileSync(templatefile, 'utf8');
+    var counter = 0;
+
+    try {
+        teams.forEach(function(team1) {
+            teams.forEach(function(team2) {
+                if (team1 != team2) {
+                    var team1full = team1.packagename + '.' + team1.teamname;
+                    var team2full = team2.packagename + '.' + team2.teamname;
+
+                    var battlefilename = team1.packagename + '-' + team2.packagename + '.battle';
+                    var battlefilecontents = templatecontents + 'robocode.battle.selectedRobots=' + team1full + '*,' + team2full + '*\n';
+
+                    fs.writeFile(folder + '/' + battlefilename, battlefilecontents, function(err) {
+                        if(err) {
+                            throw err;
+                        }
+                    });
+                    counter++;
+                }
+            });
+        });
+
+        deferred.resolve(counter);
+    } catch (e) {
+        deferred.reject('Error writing battle files: ' + e);
+    }
+
+    return deferred.promise;
+};
+
+/**
+ * Run all the battle files in the given folder
+ * @param folder The folder where the battlefiles are and where the output should be stored
+ * @param container The container to run the battles in
+ * @param count The number of battlefiles
+ */
+var runBattles = function(folder, container, count) {
+    var deferred = Q.defer();
+
+    var barOpts = {
+        width: 40,
+        total: count,
+        clear: true
+    };
+    var bar = new ProgressBar('  Running [:bar] :percent :etas', barOpts);
+
+    Q.async(function *() {
+        var files = fs.readdirSync(folder);
+        for (var i in files) {
+            var filename = files[i];
+            if (filename.indexOf('.battle') > -1) {
+                var battlefile = filename;
+                var scorefile = filename.replace('.battle', '.txt');
+                var replayfile = filename.replace('.battle', '.br');
+
+                //Clean up score and replay files from last run
+                if (fs.existsSync(folder + '/' + scorefile)) {
+                    fs.unlinkSync(folder + '/' + scorefile);
+                }
+                if (fs.existsSync(folder + '/' + replayfile)) {
+                    fs.unlinkSync(folder + '/' + replayfile);
+                }
+
+                yield runBattle(folder, container, battlefile, scorefile, replayfile);
+                bar.tick(1);
+            }
+        }
+    })().done(function() {
+        deferred.resolve();
+    })
+
+    return deferred.promise;
+
+};
+
+/**
+ * Runs the battle specified in the battle file
+ * @param folder The working folder
+ * @param container The container to run Robocode in
+ * @param battlefile The battle file with the battle
+ * @param scorefile The output file for the score
+ * @param replayfile The output file for the replay
+ * @returns {*|promise}
+ */
+var runBattle = function(folder, container, battlefile, scorefile, replayfile) {
+    var deferred = Q.defer();
+    //process.stdout.write(chalk.cyan('  Running ' + battlefile + '...\n'));
+
+    //java -Xmx512M -Dsun.io.useCanonCaches=false -DROBOTPATH=robots/ -cp libs/robocode.jar:. robocode.Robocode -battle battles/intro.battle -nodisplay -results results.txt -record results.replay
+    var options = {
+        Cmd: ['java', '-Xmx512M', '-Dsun.io.useCanonCaches=false', '-DROBOTPATH=workingfolder/' , '-cp', 'libs/robocode.jar:.', 'robocode.Robocode', '-nodisplay', '-battle', 'workingfolder/' + battlefile, '-results', 'workingfolder/' + scorefile, '-record', 'workingfolder/' + replayfile],
+        AttachStdout: true,
+        AttachStderr: true
+    };
+
+    container.exec(options, function(err, exec) {
+        //if (err) deferred.reject('Error running Robocde command inside the container');;
+        exec.start(function(err, stream) {
+            //if (err) deferred.reject('Error running Robocde command inside the container');
+            //container.modem.demuxStream(stream, process.stdout, process.stderr);
+
+        });
     });
 
-    return validteams;
-};
+    var opts = {
+        resources: [folder + '/' + scorefile],
+        timeout: 600000,        //Wait 10 minutes and then timeouts
+    }
+    waitOn(opts, function (err) {
+        if (err) {deferred.reject('There was an error waiting for the results file');}
+        deferred.resolve();
+    });
+
+    return deferred.promise;
+}
+
 
 /**
 var extractTeam = function(container) {
@@ -189,7 +356,17 @@ try {
 
         //STEP 4: Generate battles
         process.stdout.write(chalk.green('Generating battles for ' + teams.length + ' teams...'));
+        var battlecount = yield generateBattles(teams, program.workingfolder, __dirname + '/templates/default.battle');
+        process.stdout.write(chalk.bold.green('OK!\n'));
 
+        //STEP 5: Run battles
+        process.stdout.write(chalk.green('Running ' + battlecount + ' battles:\n'));
+        yield runBattles(program.workingfolder, container, battlecount);
+        process.stdout.write(chalk.bold.green('OK!\n'));
+
+        //STEP 6: Parsing results
+        process.stdout.write(chalk.green('Parsing results...'));
+        //TODO
         process.stdout.write(chalk.bold.green('OK!\n'));
 
     })().catch(function (error) {
