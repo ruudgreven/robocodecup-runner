@@ -11,6 +11,7 @@ var Q = require('q');
 var unzip = require('unzip');
 var readrecursive = require('fs-readdir-recursive');
 var waitOn = require('wait-on');
+var AdmZip = require('adm-zip');
 
 var Docker = require('dockerode');
 var docker = new Docker({socketPath:'/var/run/docker.sock', version: 'v1.13'});
@@ -234,7 +235,7 @@ var runBattles = function(folder, container, count) {
             var filename = files[i];
             if (filename.indexOf('.battle') > -1) {
                 var battlefile = filename;
-                var scorefile = filename.replace('.battle', '.txt');
+                var scorefile = filename.replace('.battle', '.result');
                 var replayfile = filename.replace('.battle', '.br');
 
                 //Clean up score and replay files from last run
@@ -277,11 +278,14 @@ var runBattle = function(folder, container, battlefile, scorefile, replayfile) {
         AttachStderr: true
     };
 
+    var logfile = folder + '/' + battlefile.replace('.battle', '.log');
+    var wstream = fs.createWriteStream(logfile);
+
     container.exec(options, function(err, exec) {
-        //if (err) deferred.reject('Error running Robocde command inside the container');;
+        if (err) deferred.reject('Error running Robocde command inside the container');;
         exec.start(function(err, stream) {
-            //if (err) deferred.reject('Error running Robocde command inside the container');
-            //container.modem.demuxStream(stream, process.stdout, process.stderr);
+            if (err) deferred.reject('Error running Robocde command inside the container');
+            container.modem.demuxStream(stream, wstream, wstream);
 
         });
     });
@@ -299,29 +303,79 @@ var runBattle = function(folder, container, battlefile, scorefile, replayfile) {
 }
 
 
-/**
-var extractTeam = function(container) {
-    var deferred = Q.defer();
+var parsingResults = function(folder) {
+    var files = fs.readdirSync(folder);
 
-    //java -Xmx512M -Dsun.io.useCanonCaches=false -DROBOTPATH=robots/ -cp libs/robocode.jar:. robocode.Robocode -battle battles/intro.battle -nodisplay -results results.txt -record results.replay
-    var options = {
-        Cmd: ['jar', 'xvf', 'workingfolder/*.jar'],
-        AttachStdout: true,
-        AttachStderr: true
-    };
+    var battles = [];
+    for (var i in files) {
+        var filename = files[i];
+        if (filename.indexOf('.result') > -1) {
+            var battle = {};
 
-    container.exec(options, function(err, exec) {
-        if (err) deferred.reject('Error running JAR command inside the container');;
-        exec.start(function(err, stream) {
-            if (err) deferred.reject('Error running JAR command inside the container');;
-            container.modem.demuxStream(stream, process.stdout, process.stderr);
-            deferred.resolve();
-        });
-    });
+            //Read lines 2 and 3
+            var contents = fs.readFileSync(folder + '/' + filename, 'utf8');
+            var contentsArray = contents.split('\n');
 
-    return deferred.promise;
+            battle.teams = [];
+
+            for (var j = 2; j < contentsArray.length; j++) {
+                var teamVals = contentsArray[j].split('\t');
+                if (teamVals.length >= 11) {
+                    var team = {
+                        team_name: teamVals[0].substr(teamVals[0].indexOf(' ') + 1, teamVals[0].lastIndexOf('.') - teamVals[0].indexOf(' ') - 1),
+                        points: 0,
+                        totalscore: parseInt(teamVals[1].substr(0, teamVals[1].indexOf(' '))),
+                        survivalscore: parseInt(teamVals[2]),
+                        survivalbonus: parseInt(teamVals[3]),
+                        bulletdamage: parseInt(teamVals[4]),
+                        bulletBonus: parseInt(teamVals[5]),
+                        ramdamage: parseInt(teamVals[6]),
+                        rambonus: parseInt(teamVals[7]),
+                        firsts: parseInt(teamVals[8]),
+                        seconds: parseInt(teamVals[9]),
+                        thirds: parseInt(teamVals[10])
+                    }
+                    battle.teams.push(team);
+                }
+            }
+
+            //Set correct points
+            battle.teams[0].points = 3;
+            battle.teams[1].points = 1;
+
+            //Add links to replay and score files
+            battle.scorefile = filename;
+            battle.replayfile = filename.replace('.result', '.br');
+            battle.datetime = new Date(fs.statSync(folder + '/' + filename).ctime);
+
+            battles.push(battle);
+        }
+    }
+
+    return battles;
 }
-**/
+
+/**
+ * Zip all the battles to one file
+ * TODO: ZIP File seems corrupt
+ * @param folder The working folder
+ * @returns {string} The filename
+ */
+var zipAllFiles = function(folder) {
+    var zip = new AdmZip();
+
+    var files = fs.readdirSync(folder);
+    for (var i in files) {
+        var filename = files[i];
+        if (filename.indexOf('.result') > -1 || filename.indexOf('.br') > -1) {
+            zip.addLocalFile(folder + '/' + filename);
+        }
+    }
+
+    var filename = folder + '/' + 'battles.zip';
+    zip.writeZip(filename);
+    return filename;
+}
 
 /**
  * Execute the script
@@ -366,8 +420,27 @@ try {
 
         //STEP 6: Parsing results
         process.stdout.write(chalk.green('Parsing results...'));
-        //TODO
+        battles = yield parsingResults(program.workingfolder);
         process.stdout.write(chalk.bold.green('OK!\n'));
+
+        //STEP 7: Writing results
+        process.stdout.write(chalk.green('Writing results...'));
+        fs.writeFile(program.workingfolder + '/battles.json', JSON.stringify(battles, null, '\t'), function(err) {
+            if(err) {
+                throw err;
+            }
+        });
+        process.stdout.write(chalk.bold.green('OK!\n'));
+
+        //STEP 8: Zip all the .result, .br and the .json file to one file
+        process.stdout.write(chalk.green('Zipping results to one file...'));
+        var outputfile = yield zipAllFiles(program.workingfolder);
+        process.stdout.write(chalk.bold.green('OK!\n'));
+
+        process.stdout.write(chalk.bold.green('\n'));
+        process.stdout.write(chalk.green('Done! There are two files with all the output:\n'));
+        process.stdout.write(chalk.bold.green('- ' + program.workingfolder + '/battles.json' + ' - A JSON dump of all battles and scores\n'));
+        process.stdout.write(chalk.bold.green('- ' + outputfile + ' - A ZIP file containing all replay and result files (But seems corrupt??? TODO: FIX)\n'));
 
     })().catch(function (error) {
         console.error(chalk.bold.red('\nError: ' + error));
