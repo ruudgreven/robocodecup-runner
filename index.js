@@ -111,7 +111,7 @@ var checkAndListTeams = function(folder) {
         }
 
         if (filename.indexOf('.class') > -1) {
-            classDefs.push(filename.substr(0, filename.length - 6).replace(/\//g, '.'));        //Remove .class postfix, and replace / with .
+            classDefs.push(filename.substr(0, filename.length - 6).replace(/\//g, '.').trim());        //Remove .class postfix, and replace / with .
         }
     }
 
@@ -135,9 +135,10 @@ var checkAndListTeams = function(folder) {
                     var robotcount = 0;
                     var robots = line.substr(13).split(',');
                     for (var k in robots) {
-                        var robot = robots[k];
+                        var robot = robots[k].trim();
                         if (classDefs.indexOf(robot) <= -1) {
                             if (classDefs.indexOf(robot.substr(0, robot.length - 1)) <= -1) {
+                                console.log(robots);
                                 throw 'Classfile for robot ' + robot + ' not found';
                             }
                         }
