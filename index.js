@@ -148,7 +148,6 @@ var checkAndListTeams = function(folder) {
                         var robot = robots[k].trim();
                         if (classDefs.indexOf(robot) <= -1) {
                             if (classDefs.indexOf(robot.substr(0, robot.length - 1)) <= -1) {
-                                console.log(robots);
                                 throw 'Classfile for robot ' + robot + ' not found';
                             }
                         }
@@ -198,8 +197,11 @@ var generateBattles = function(teams, folder, templatefile) {
     var counter = 0;
 
     try {
-        teams.forEach(function(team1) {
-            teams.forEach(function(team2) {
+        for (var i in teams) {
+            var team1 = teams[i];
+            for (var j in teams) {
+                var team2 = teams[j];
+
                 if (team1 != team2) {
                     var team1full = team1.packagename + '.' + team1.teamname;
                     var team2full = team2.packagename + '.' + team2.teamname;
@@ -217,6 +219,12 @@ var generateBattles = function(teams, folder, templatefile) {
 
                     counter++;
                 }
+            }
+        }
+
+        teams.forEach(function(team1) {
+            teams.forEach(function(team2) {
+
             });
         });
 
@@ -466,26 +474,31 @@ try {
         logFile.write('OK!\n');
 
         //STEP 8: Zip all the .result, .br and the .json file to one file
-        process.stdout.write(chalk.green('Zipping results to one file...'));
-        logFile.write('Zipping results to one file...');
-        var outputfile = yield zipAllFiles(program.workingfolder);
-        process.stdout.write(chalk.bold.green('OK!\n'));
-        logFile.write('OK!\n');
+        //process.stdout.write(chalk.green('Zipping results to one file...'));
+        //logFile.write('Zipping results to one file...');
+        //var outputfile = yield zipAllFiles(program.workingfolder);
+        //process.stdout.write(chalk.bold.green('OK!\n'));
+        //logFile.write('OK!\n');
 
         process.stdout.write(chalk.bold.green('\n'));
         process.stdout.write(chalk.green('Done! There are two files with all the output:\n'));
         process.stdout.write(chalk.bold.green('- ' + program.workingfolder + '/battles.json' + ' - A JSON dump of all battles and scores\n'));
-        process.stdout.write(chalk.bold.green('- ' + outputfile + ' - A ZIP file containing all replay and result files (But seems corrupt??? TODO: FIX)\n'));
+        //process.stdout.write(chalk.bold.green('- ' + outputfile + ' - A ZIP file containing all replay and result files (But seems corrupt??? TODO: FIX)\n'));
         logFile.write('Done!\n');
 
         logFile.close();
     })().catch(function (error) {
         console.error(chalk.bold.red('\nError: ' + error));
-        logFile.write('\nError: ' + error + '\n');
-        logFile.close();
+        if (logFile != undefined) {
+            logFile.write('\nError: ' + error + '\n');
+            logFile.close();
+        }
     }).done();
 } catch (error) {
     console.error(chalk.red('\nError: ' + error));
-    logFile.write('\nError: ' + error + '\n');
-    logFile.close();
+    if (logFile != undefined) {
+        logFile.write('\nError: ' + error + '\n');
+        logFile.close();
+    }
+
 }
