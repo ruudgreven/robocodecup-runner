@@ -15,6 +15,7 @@ var AdmZip = require('adm-zip');
 
 var Docker = require('dockerode');
 var docker = new Docker({socketPath:'/var/run/docker.sock', version: 'v1.13'});
+var sleep = require('sleep');
 
 var logFile = undefined;
 
@@ -221,12 +222,6 @@ var generateBattles = function(teams, folder, templatefile) {
                 }
             }
         }
-
-        teams.forEach(function(team1) {
-            teams.forEach(function(team2) {
-
-            });
-        });
 
         deferred.resolve(counter);
     } catch (e) {
@@ -447,6 +442,11 @@ try {
         var battlecount = yield generateBattles(teams, program.workingfolder, __dirname + '/templates/default.battle');
         process.stdout.write(chalk.bold.green('OK!\n'));
         logFile.write('OK!\n');
+
+        //TODO: Very ugly, wait for file writings
+        process.stdout.write(chalk.green('Wait a second...'));
+        sleep.sleep(1);
+        process.stdout.write(chalk.bold.green('OK!\n'));
 
         //STEP 5: Run battles
         process.stdout.write(chalk.green('Running ' + battlecount + ' battles:\n'));
