@@ -15,9 +15,9 @@ var AdmZip = require('adm-zip');
 
 var Docker = require('dockerode');
 var docker = new Docker({socketPath:'/var/run/docker.sock', version: 'v1.13'});
-var sleep = require('sleep');
-
 var logFile = undefined;
+
+const wait = require('util').promisify(setTimeout);
 
 /**
  * Check the arguments of the script
@@ -445,7 +445,9 @@ try {
 
         //TODO: Very ugly, wait for file writings
         process.stdout.write(chalk.green('Wait a second...'));
-        sleep.sleep(1);
+        (async () => {
+          await wait(1000);
+        })();
         process.stdout.write(chalk.bold.green('OK!\n'));
 
         //STEP 5: Run battles
